@@ -21,33 +21,48 @@ def authenticate_hubspot():
     return headers
 
 def get_subscription_list():
-    # Fetch the subscription list from HubSpot
+    """Fetch all HubSpot contacts and return emails of those with subscriptionstatus=Active."""
     headers = authenticate_hubspot()
-    params = {
-        'property': 'SubscriptionStatus',
-        'value': 'Active'
-    }
-    response = requests.get(f'{HUBSPOT_API_BASE_URL}/contacts/v1/lists/all/contacts/all', headers=headers,
-                            params=params)
+    url = f"{HUBSPOT_API_BASE_URL}/contacts/v1/lists/all/contacts/all"
+    params = {"count": 100, "property": ["subscriptionstatus", "email"]}
 
-    if response.status_code == 200:
-        contacts = response.json()['contacts']
-        subscribers = []
+    subscribers = []
+    has_more = True
+    vid_offset = None
 
-        # Get subscribers' email addresses
+    while has_more:
+        if vid_offset:
+            params["vidOffset"] = vid_offset
+
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code != 200:
+            print(f"Failed to get contacts from HubSpot: {response.text}")
+            break
+
+        data = response.json()
+        contacts = data.get("contacts", [])
+        has_more = data.get("has-more", False)
+        vid_offset = data.get("vid-offset")
+
         for contact in contacts:
-            if 'properties' in contact and 'subscriptionstatus' in contact['properties']:
-                subscription_status = contact['properties']['subscriptionstatus']['value']
-                if subscription_status == 'Active':
-                    for identity_profile in contact['identity-profiles']:
-                        for identity in identity_profile['identities']:
-                            if identity['type'] == 'EMAIL':
-                                subscribers.append((identity['value'], contact['vid']))
+            # Extract subscription status
+            props = contact.get("properties", {})
+            status = props.get("subscriptionstatus", {}).get("value", "").lower()
 
-        return [email for email, _ in subscribers]
-    else:
-        print(f'Failed to get subscription list from HubSpot: {response.text}')
-        return []
+            if status == "active":
+                # Extract email from identity profiles
+                email = None
+                for profile in contact.get("identity-profiles", []):
+                    for identity in profile.get("identities", []):
+                        if identity.get("type") == "EMAIL":
+                            email = identity.get("value")
+                            break
+                    if email:
+                        break
+
+                if email:
+                    subscribers.append(email)
+    return subscribers
 
 def send_email(api_key, sender_email, bcc_recipients, subject, body):
     try:
